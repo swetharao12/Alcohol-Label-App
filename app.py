@@ -518,6 +518,25 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
+SAMPLE_LABEL_DIR = Path(__file__).resolve().parent / "label-batch"
+sample_image_paths = (
+    sorted(p for p in SAMPLE_LABEL_DIR.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
+    if SAMPLE_LABEL_DIR.is_dir()
+    else []
+)
+
+sample_files = []
+if sample_image_paths:
+    st.caption("Or pick from the sample label images below:")
+    sample_columns = st.columns(len(sample_image_paths))
+    for column, image_path in zip(sample_columns, sample_image_paths):
+        with column:
+            st.image(str(image_path), caption=image_path.name, use_container_width=True)
+            if st.checkbox("Use this image", key=f"sample_{image_path.name}"):
+                sample_files.append(LocalImageFile(image_path))
+
+uploaded_files = list(uploaded_files or []) + sample_files
+
 if uploaded_files:
     # --- Batch mode ---
     st.write(f"{len(uploaded_files)} image(s) queued for batch verification.")
