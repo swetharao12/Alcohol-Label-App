@@ -47,23 +47,23 @@ Compliance agents spend a large portion of their time comparing label artwork ag
 
 ## Suggested Workflow
 
-### Single label
-1. Choose a mock case from the application database (no image required), or upload one image.
-2. Click "Run verification".
-3. Review the per-field similarity scores and the ML prediction.
-
 ### Batch (peak intake periods)
-1. Upload many label images at once.
-2. Click "Run batch verification".
-3. Each image is matched to the closest application record, scored independently, and added to a results table — a failure on one image does not stop the rest.
-4. Review the summary counts, download the results as CSV, or expand any row for per-field detail.
-5. Confirm, reject, or send flagged items for manual review.
+- Upload many label images at once. Sample test images are available in [label-batch/](label-batch).
+- Click "Run batch verification".
+- Each image is matched to the closest application record, scored independently, and added to a results table — a failure on one image does not stop the rest.
+- Review the summary counts, download the results as CSV, or expand any row for per-field detail.
+- Confirm, reject, or send flagged items for manual review.
+
+### Single label (mock verification)
+- Choose a mock case from the application database (no image required), or upload one image.
+- Click "Run verification".
+- Review the per-field similarity scores and the ML prediction.
 
 ### Folder-based batch: run now or schedule for later
-1. Enter the path to a local folder containing label images.
-2. Choose "Run now" to process the folder immediately, or "Schedule for later" and set how many minutes from now it should start.
-3. A scheduled run happens in a background thread while the app keeps running — results are written to a timestamped CSV under `results/`, and the latest status (scheduled, running, completed, or error) is shown in the UI.
-4. Use "Refresh status" to check on a run without restarting the app.
+- Enter the path to a local folder containing label images, e.g. [label-batch/](label-batch).
+- Choose "Run now" to process the folder immediately, or "Schedule for later" and set how many minutes from now it should start.
+- A scheduled run happens in a background thread while the app keeps running — results are written to a timestamped CSV under `results/`, and the latest status (scheduled, running, completed, or error) is shown in the UI.
+- Use "Refresh status" to check on a run without restarting the app.
 
 ## Design Principles
 

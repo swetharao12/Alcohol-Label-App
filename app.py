@@ -206,6 +206,17 @@ ABV_KEYWORDS = ("alc./vol", "alcohol by volume", "proof")
 ABV_CONTINUATION_RE = re.compile(r"alc\.?/vol|alcohol by volume|proof|%", re.IGNORECASE)
 
 
+def _contains_class_keyword(text):
+    # OCR sometimes inserts stray spaces inside a word (e.g. "GI N" for "GIN"); ignore whitespace when matching.
+    collapsed = text.casefold().replace(" ", "")
+    return any(keyword in collapsed for keyword in CLASS_TYPE_KEYWORDS)
+
+
+def _clean_ocr_line(line):
+    # OCR sometimes tacks on stray punctuation (e.g. "OCEAN BREEZE]"); trim it so the brand regex still matches.
+    return re.sub(r"^[^A-Za-z]+|[^A-Za-z&'\-]+$", "", line)
+
+
 def derive_fields_from_transcript(lines):
     derived_fields = {
         "brand_name": "",
@@ -220,22 +231,26 @@ def derive_fields_from_transcript(lines):
     while index < len(lines):
         line = lines[index]
         normalized_line = line.casefold()
+        cleaned_line = _clean_ocr_line(line)
 
-        if not derived_fields["brand_name"] and BRAND_NAME_LINE_RE.fullmatch(line):
-            # Brand names are often stacked/wrapped across several all-caps lines (e.g. a banner design).
-            brand_lines = [line.strip()]
+        if not derived_fields["brand_name"] and BRAND_NAME_LINE_RE.fullmatch(cleaned_line) and not _contains_class_keyword(cleaned_line):
+            # Brand names are often stacked/wrapped across several all-caps lines (e.g. a banner design), and the
+            # spirit keyword itself is sometimes part of the brand's logotype (e.g. "OCEAN BREEZE" / "GIN"), so
+            # allow one keyword-bearing line into the brand before stopping at the formal class/type designation.
+            brand_lines = [cleaned_line.strip()]
+            merged_keyword = False
             index += 1
-            while (
-                index < len(lines)
-                and BRAND_NAME_LINE_RE.fullmatch(lines[index])
-                and not any(keyword in lines[index].casefold() for keyword in CLASS_TYPE_KEYWORDS)
-            ):
-                brand_lines.append(lines[index].strip())
+            while index < len(lines) and not merged_keyword:
+                next_line = _clean_ocr_line(lines[index])
+                if not BRAND_NAME_LINE_RE.fullmatch(next_line):
+                    break
+                brand_lines.append(next_line.strip())
+                merged_keyword = _contains_class_keyword(next_line)
                 index += 1
             derived_fields["brand_name"] = " ".join(brand_lines)
             continue
 
-        if not derived_fields["class_type"] and any(keyword in normalized_line for keyword in CLASS_TYPE_KEYWORDS):
+        if not derived_fields["class_type"] and _contains_class_keyword(normalized_line):
             # Prepend any preceding qualifier line (e.g. "Kentucky Straight") before "BOURBON WHISKEY".
             derived_fields["class_type"] = " ".join(class_type_lead_in + [line.strip()])
             class_type_lead_in = []
@@ -476,19 +491,11 @@ def run_scheduled_batch(folder_path_str: str, run_at_iso: str):
         write_scheduler_status(status="error", completed_at=datetime.now().isoformat(), error=str(exc))
 
 
-st.subheader("2. Upload Label Images (Batch Supported)")
+st.subheader("Upload Label Images (Batch Supported)")
 uploaded_files = st.file_uploader(
     "Upload one or more label images to process as a batch",
     type=["png", "jpg", "jpeg", "webp"],
     accept_multiple_files=True,
-)
-
-st.caption("No images? Test a single case from the mock application database instead:")
-selected_case = st.selectbox(
-    "Choose which mock case to run",
-    options=mock_case_options,
-    format_func=lambda option: option["label"],
-    index=0,
 )
 
 if uploaded_files:
@@ -526,7 +533,7 @@ if uploaded_files:
         progress_bar.empty()
         results_df = pd.DataFrame(batch_results)
 
-        st.subheader("3. Batch Verification Results")
+        st.subheader("Batch Verification Results")
         status_counts = results_df["predicted_status"].value_counts()
         summary_columns = st.columns(4)
         summary_columns[0].metric("Total processed", len(results_df))
@@ -545,7 +552,7 @@ if uploaded_files:
 
         known_ground_truth_df = results_df[results_df["ground_truth_status"] != ""]
         if not known_ground_truth_df.empty:
-            st.subheader("4. Evaluation on Items With Known Ground Truth")
+            st.subheader("Evaluation on Items With Known Ground Truth")
             st.caption("These items used a demo fallback record, so the ground truth is known and can be scored.")
             from sklearn.metrics import classification_report
 
@@ -561,7 +568,7 @@ if uploaded_files:
                 )
             )
 
-        st.subheader("5. Per-Item Details")
+        st.subheader("Per-Item Details")
         for file_name, detail in batch_details.items():
             with st.expander(f"{file_name}"):
                 st.write("Matched application data")
@@ -572,106 +579,116 @@ if uploaded_files:
                 st.json({key: round(value, 3) for key, value in detail["features"].items()})
     else:
         st.info("Click 'Run batch verification' to process all uploaded images.")
-else:
-    # --- Single mock-case mode ---
-    st.subheader("3. Label Data (Mock OCR Output)")
-    st.json(selected_case["data"]["extracted_text"])
-
-    st.subheader("4. Application Data for Selected Mock Case")
-    st.json(selected_case["data"]["application_data"])
-
-    st.caption(f"Selected mock case: {selected_case['label']}")
-
-    with st.expander("What this selected case represents", expanded=False):
-        extracted = selected_case["data"]["extracted_text"]
-        application = selected_case["data"]["application_data"]
-        st.write(f"Ground truth: {selected_case['data']['ground_truth_status']}")
-        st.write(f"Brand name: {application['brand_name']}")
-        st.write(f"ABV: {application['abv']}")
-        st.write(f"Net contents: {application['net_contents']}")
-        warning_matches = extracted["government_warning"] == application["government_warning"]
-        st.write(f"Government warning: {'matches' if warning_matches else 'differs'}")
-
-        if not warning_matches:
-            st.write("Government warning diff:")
-            warning_diff = difflib.unified_diff(
-                application["government_warning"].split(),
-                extracted["government_warning"].split(),
-                fromfile="application",
-                tofile="mock_ocr",
-                lineterm="",
-            )
-            st.code("\n".join(warning_diff), language="diff")
-
-        mismatched_fields = [field_name for field_name in FIELDS if extracted[field_name] != application[field_name]]
-        if mismatched_fields:
-            st.write("Mismatched fields:")
-            st.write(", ".join(mismatched_fields))
-        else:
-            st.write("All selected fields match.")
-
-    st.subheader("5. Single-Case Verification Workflow")
-    run_verification = st.button("Run verification", type="primary")
-
-    if run_verification:
-        selected_label = selected_case["data"]
-        application_data = selected_label["application_data"]
-        extracted_data = selected_label["extracted_text"]
-
-        similarity_features = compute_similarity_features(application_data, extracted_data)
-        predicted_label, probabilities = predict_verdict(verification_model, similarity_features)
-
-        result_entry = {
-            "label_id": selected_label["label_id"],
-            "ground_truth_status": selected_label["ground_truth_status"],
-            "predicted_status": predicted_label,
-            "pass_probability": round(probabilities.get("Pass", 0.0), 3),
-            "fail_probability": round(probabilities.get("Fail", 0.0), 3),
-            **{key: round(value, 3) for key, value in similarity_features.items()},
-        }
-
-        with st.expander(
-            f"Process selected label ({selected_label['label_id']}) - Ground truth: {selected_label['ground_truth_status']}",
-            expanded=True,
-        ):
-            st.subheader("Extracted values used for comparison")
-            st.json(extracted_data)
-            st.subheader("Similarity features and ML prediction")
-            st.json(result_entry)
-
-        results_df = pd.DataFrame([result_entry])
-        st.subheader("6. Verification Results")
-        st.dataframe(results_df, use_container_width=True)
-
-        st.subheader("7. Evaluation Metrics")
-        from sklearn.metrics import classification_report
-
-        y_true = results_df["ground_truth_status"].apply(lambda x: 1 if x == "Fail" else 0)
-        y_pred = results_df["predicted_status"].apply(lambda x: 1 if x == "Fail" else 0)
-
-        st.text("Classification report for this single case:")
-        st.text(
-            classification_report(
-                y_true,
-                y_pred,
-                labels=[0, 1],
-                target_names=["Pass", "Fail"],
-                zero_division=0,
-            )
-        )
-        st.caption(f"Model held-out test accuracy across {training_row_count} training rows: {model_test_accuracy:.2%}")
-
-        st.subheader("8. Anomaly Detection and Detailed Feedback")
-        low_similarity_fields = [field for field in FIELDS if similarity_features[f"{field}_similarity"] < 0.85]
-        if low_similarity_fields:
-            st.warning("Fields with low similarity: " + ", ".join(low_similarity_fields))
-        else:
-            st.success("All fields show high similarity between the application data and the extracted label data.")
-    else:
-        st.info("Choose a mock case and click 'Run verification', or upload one or more images above for batch processing.")
 
 st.divider()
-st.subheader("6. Folder-Based Batch: Run Now or Schedule for Later")
+
+# --- Single mock-case mode (always available, alongside batch upload) ---
+st.markdown("#### Test a single case from the mock application database:")
+selected_case = st.selectbox(
+    "Choose which mock case to run",
+    options=mock_case_options,
+    format_func=lambda option: option["label"],
+    index=0,
+)
+
+st.subheader("Label Data (Mock OCR Output)")
+st.json(selected_case["data"]["extracted_text"])
+
+st.subheader("Application Data for Selected Mock Case")
+st.json(selected_case["data"]["application_data"])
+
+st.caption(f"Selected mock case: {selected_case['label']}")
+
+with st.expander("What this selected case represents", expanded=False):
+    extracted = selected_case["data"]["extracted_text"]
+    application = selected_case["data"]["application_data"]
+    st.write(f"Ground truth: {selected_case['data']['ground_truth_status']}")
+    st.write(f"Brand name: {application['brand_name']}")
+    st.write(f"ABV: {application['abv']}")
+    st.write(f"Net contents: {application['net_contents']}")
+    warning_matches = extracted["government_warning"] == application["government_warning"]
+    st.write(f"Government warning: {'matches' if warning_matches else 'differs'}")
+
+    if not warning_matches:
+        st.write("Government warning diff:")
+        warning_diff = difflib.unified_diff(
+            application["government_warning"].split(),
+            extracted["government_warning"].split(),
+            fromfile="application",
+            tofile="mock_ocr",
+            lineterm="",
+        )
+        st.code("\n".join(warning_diff), language="diff")
+
+    mismatched_fields = [field_name for field_name in FIELDS if extracted[field_name] != application[field_name]]
+    if mismatched_fields:
+        st.write("Mismatched fields:")
+        st.write(", ".join(mismatched_fields))
+    else:
+        st.write("All selected fields match.")
+
+st.subheader("Single-Case Verification Workflow")
+run_verification = st.button("Run verification", type="primary")
+
+if run_verification:
+    selected_label = selected_case["data"]
+    application_data = selected_label["application_data"]
+    extracted_data = selected_label["extracted_text"]
+
+    similarity_features = compute_similarity_features(application_data, extracted_data)
+    predicted_label, probabilities = predict_verdict(verification_model, similarity_features)
+
+    result_entry = {
+        "label_id": selected_label["label_id"],
+        "ground_truth_status": selected_label["ground_truth_status"],
+        "predicted_status": predicted_label,
+        "pass_probability": round(probabilities.get("Pass", 0.0), 3),
+        "fail_probability": round(probabilities.get("Fail", 0.0), 3),
+        **{key: round(value, 3) for key, value in similarity_features.items()},
+    }
+
+    with st.expander(
+        f"Process selected label ({selected_label['label_id']}) - Ground truth: {selected_label['ground_truth_status']}",
+        expanded=True,
+    ):
+        st.subheader("Extracted values used for comparison")
+        st.json(extracted_data)
+        st.subheader("Similarity features and ML prediction")
+        st.json(result_entry)
+
+    results_df = pd.DataFrame([result_entry])
+    st.subheader("Verification Results")
+    st.dataframe(results_df, use_container_width=True)
+
+    st.subheader("Evaluation Metrics")
+    from sklearn.metrics import classification_report
+
+    y_true = results_df["ground_truth_status"].apply(lambda x: 1 if x == "Fail" else 0)
+    y_pred = results_df["predicted_status"].apply(lambda x: 1 if x == "Fail" else 0)
+
+    st.text("Classification report for this single case:")
+    st.text(
+        classification_report(
+            y_true,
+            y_pred,
+            labels=[0, 1],
+            target_names=["Pass", "Fail"],
+            zero_division=0,
+        )
+    )
+    st.caption(f"Model held-out test accuracy across {training_row_count} training rows: {model_test_accuracy:.2%}")
+
+    st.subheader("Anomaly Detection and Detailed Feedback")
+    low_similarity_fields = [field for field in FIELDS if similarity_features[f"{field}_similarity"] < 0.85]
+    if low_similarity_fields:
+        st.warning("Fields with low similarity: " + ", ".join(low_similarity_fields))
+    else:
+        st.success("All fields show high similarity between the application data and the extracted label data.")
+else:
+    st.info("Choose a mock case and click 'Run verification'.")
+
+st.divider()
+st.subheader("Folder-Based Batch: Run Now or Schedule for Later")
 st.caption("Point the app at a local folder of label images. Run the batch immediately, or schedule it to start later.")
 
 folder_path_input = st.text_input("Folder path containing label images", value="")
