@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
 
 FIELDS = ["brand_name", "class_type", "abv", "net_contents", "government_warning"]
+REQUIRED_DB_COLUMNS = ["label_id"] + FIELDS
 TRAINING_DATA_PATH = Path(__file__).resolve().parent / "data" / "label_verification_training_data.csv"
 MATCH_CONFIDENCE_THRESHOLD = 0.4
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -41,6 +42,11 @@ st.title("AI-Powered Alcohol Label Verification App")
 with st.sidebar:
     st.header("DB Data")
     st.info("Runs fully locally: OCR extraction plus a trained ML classifier. No external API key is required.")
+    uploaded_db_csv = st.file_uploader(
+        "Upload application database CSV (optional)",
+        type=["csv"],
+        help="Replaces the built-in demo records. Required columns: " + ", ".join(REQUIRED_DB_COLUMNS),
+    )
 
 
 application_data_df = pd.DataFrame(
@@ -77,6 +83,20 @@ application_data_df = pd.DataFrame(
         ],
     }
 )
+
+if uploaded_db_csv is not None:
+    try:
+        custom_db_df = pd.read_csv(uploaded_db_csv, dtype=str).fillna("")
+        missing_db_columns = [column for column in REQUIRED_DB_COLUMNS if column not in custom_db_df.columns]
+        if missing_db_columns:
+            st.sidebar.error(
+                f"CSV is missing required columns: {', '.join(missing_db_columns)}. Using the built-in demo records instead."
+            )
+        else:
+            application_data_df = custom_db_df[REQUIRED_DB_COLUMNS]
+            st.sidebar.success(f"Loaded {len(application_data_df)} application record(s) from the uploaded CSV.")
+    except Exception as exc:
+        st.sidebar.error(f"Could not read the uploaded CSV: {exc}. Using the built-in demo records instead.")
 
 simulated_label_ocr_outputs = [
     {
