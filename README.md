@@ -11,6 +11,24 @@ This project is designed around the requirements in the take-home brief:
 - runs entirely locally, with no external API key required
 - uploaded images are read with local OCR, and pass/fail decisions come from a trained ML classifier
 
+## Approach, Tools, and Assumptions
+
+**Approach:** Uploaded label images are read with local OCR, then simple line-based heuristics (`derive_fields_from_transcript` in [app.py](app.py)) parse the raw OCR transcript into brand name, class/type, ABV, net contents, and government warning fields. Each field is compared against the closest-matching application record using string similarity, and those similarity scores are fed into a small trained classifier to produce a Pass/Fail verdict plus per-field reasoning. The UI supports three complementary testing paths (single mock case, batch image upload, folder-based batch) so the workflow can be exercised with or without real label photos.
+
+**Tools used:**
+- [Streamlit](https://streamlit.io/) for the UI
+- [EasyOCR](https://github.com/JaidedAI/EasyOCR) for local, offline text extraction from label images
+- `pandas` for tabular data handling (application database, batch results)
+- `scikit-learn` (`RandomForestClassifier`) trained on a synthetic labeled CSV to predict Pass/Fail from similarity features
+- `difflib.SequenceMatcher` for fuzzy string similarity (brand matching, field comparison)
+- Python's `threading` module for background/scheduled folder batch runs
+
+**Key assumptions:**
+- This is a standalone prototype, not integrated with COLA or any production data store.
+- OCR quality varies by label design (stylized fonts, arched text, multi-line stacking), so field-parsing heuristics are best-effort and validated against real sample images in [label-batch/](label-batch) rather than assumed correct.
+- The training data is synthetic (see [scripts/generate_training_data.py](scripts/generate_training_data.py)), so the classifier's accuracy is a proxy for real-world performance, not a guarantee.
+- Human review remains the final authority; the app is meant to assist, not replace, compliance agents.
+
 ## Problem Statement
 
 Compliance agents spend a large portion of their time comparing label artwork against application fields such as brand name, class/type, alcohol content, net contents, and the government warning statement. Much of this work is repetitive and can be assisted by automation, as long as the system stays fast, understandable, and easy to use.
