@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# App-generated batch results and scheduler status
+/results/
+
 # C extensions
 *.so
 
